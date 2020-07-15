@@ -97,6 +97,7 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
         try {
             log.warn("Start up");
             context.getExecutionManager().register(getClass().getName(), TASK_NAME, this::updateValues, 1000);
+            context.getExecutionManager().register(getClass().getName(), "T", this::readAndPublishTags, 1000);
 
             log.info("Example Provider module started.");
 
@@ -185,8 +186,8 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
        }
 
        if (!tagRecords.isEmpty()) {
-           tagRecords.forEach(record -> log.warn(record.getMetricName()));
-           //publish(tagRecords);
+           tagRecords.forEach(record -> log.warn(record.getMetricName() + "HELLO WORLD"));
+           publish(tagRecords);
        }
    }
 
