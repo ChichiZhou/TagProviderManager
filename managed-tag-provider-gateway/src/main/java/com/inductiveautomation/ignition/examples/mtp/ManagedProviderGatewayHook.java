@@ -30,7 +30,6 @@ import com.inductiveautomation.ignition.gateway.tags.managed.ProviderConfigurati
 import com.inductiveautomation.ignition.gateway.tags.model.GatewayTagManager;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
-import metric.Constants;
 import metric.TagsUtil;
 import org.apache.log4j.Logger;
 
@@ -43,13 +42,6 @@ import org.apache.log4j.Logger;
  * <p/>
  * There is a "control" tag that can be used to modify the number of tags provided. This tag illustrates how to set up
  * write handling.
- *
- * 能否根据这个来模拟一个 tag 流。
- * 从最初始的状态到把 metric publish 到 cloudwatch， 然后创建 carnaval 之类的
- *
- * 这里会创建一个 control tag，其作用是控制所创建的 Custom Tags 的数量。相当于一个开关。是可读可写的
- * 并且会创建许多别的 tags，其命名格式为 Custom Tags/Tag %d。 这些 tags 会自动更新。但是只读的
- *
  */
 @Slf4j
 public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
@@ -67,14 +59,13 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
 
 
     public ManagedProviderGatewayHook() {
-//        logger = LogManager.getLogger(this.getClass());
+
     }
 
     @Override
     public void setup(GatewayContext context) {
         try {
             this.context = context;
-            // 新创建的 Provider 名字就是 Example
             ProviderConfiguration configuration = new ProviderConfiguration("Example");
 
             // Needed to allow tag configuration to be editable. Comment this out to disable tag configuration editing.
@@ -82,8 +73,6 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
             configuration.setPersistTags(false);
             configuration.setPersistValues(false);
             configuration.setAttribute(TagProviderMeta.FLAG_HAS_OPCBROWSE, false);
-
-            // 创建需要的 tag provider
             ourProvider = context.getTagManager().getOrCreateManagedProvider(configuration);
             //Set up the control tag.
             //1) Create the tag, and set its type.
@@ -97,11 +86,7 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
             });
 
             //Now set up our first batch of tags.
-            // 创建10个 tags
             adjustTags(10);
-
-
-
         } catch (Exception e) {
             log.warn("Error setting up ManagedTagProvider example module.", e);
         }
@@ -110,18 +95,8 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
     @Override
     public void startup(LicenseState activationState) {
         try {
-            // Register a task with the execution system to update values every second.
-            // 相当于让系统自己跑一个脚本，执行一个程序。而这里执行的是 updateValues，即更新数据
-            // 这里的 1000 应该是指 1000 ms
-            // context.getExecutionManager() 得到的是 BasicExecutionEngine
-            // 将后面的注册到 BasicExecutionEngine 中
-            log.warn("FFFFFFFFFFFFFF");
+            log.warn("Start up");
             context.getExecutionManager().register(getClass().getName(), TASK_NAME, this::updateValues, 1000);
-//            context.getExecutionManager().register(getClass().getName(), "T", this::readAndPublishTags, 1000);
-
-
-            // 用下面的方法创建一个 ExecutionManager
-            // ExecutionManager executionManager = context.createExecutionManager()
 
             log.info("Example Provider module started.");
 
@@ -158,12 +133,10 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
     private synchronized void adjustTags(int newCount) {
         if (newCount > currentTagCount) {
             for (int i = currentTagCount; i < newCount; i++) {
-                // 创建 Tags
                 ourProvider.configureTag(String.format(TAG_NAME_PATTERN, i), DataType.Float8);
             }
         } else if (newCount < currentTagCount) {
             for (int i = currentTagCount; i > newCount; i--) {
-                // 创建 Tags
                 ourProvider.removeTag(String.format(TAG_NAME_PATTERN, i));
             }
         }
@@ -173,10 +146,6 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
         ourProvider.updateValue(CONTROL_TAG, currentTagCount, QualityCode.Good);
     }
 
-    /**
-     * Update the values of the tags.
-     * 这个作用是每秒钟更新 tag value
-     */
     private synchronized void updateValues() {
         Random r = new Random();
         for (int i = 0; i < currentTagCount; i++) {
@@ -186,16 +155,15 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
     }
 
    private void readAndPublishTags(){
-        log.warn("TTTTTTTTTTTTT");
+        log.warn("Read And Publish Tags");
        GatewayTagManager tagsManager = this.context.getTagManager();
-        // 创建 dimensions 这里应该是有很多个 dimension
        Dimension dimension = new Dimension()
                .withName("TAGS_TEST")
                .withValue("TEST1");
 
        final List<MetricDatum> tagRecords = Lists.newArrayList();
        try {
-           // 新创建的 tagprovider name 就是 Example
+
            TagPath rootPath = TagPathParser.parse(tagProviderName, "");
            List<NodeDescription> nodeDescriptions = TagsUtil.readAllTags(tagProviderName, tagsManager, rootPath);
            nodeDescriptions.forEach(description -> log.warn(description.getName()));
@@ -223,9 +191,7 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
    }
 
     private Optional<MetricDatum> createTagRecord(
-            final boolean isHot, @NonNull final NodeDescription nodeDescription, TagPath rootPath, Dimension dimension) {
-        // final TagInfo tagInfo = tagInfoResult.getTagInfo();
-        // 这个是 AWS service 中的内容
+        final boolean isHot, @NonNull final NodeDescription nodeDescription, TagPath rootPath, Dimension dimension) {
         return getTagRecordValueConverter(TagType.fromTagObjectType(nodeDescription.getObjectType()), nodeDescription.getDataType())
                 .map(
                         converter ->
@@ -275,7 +241,7 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
         final AmazonCloudWatch cw =
                 AmazonCloudWatchClientBuilder.defaultClient();
         final PutMetricDataRequest request =
-                new PutMetricDataRequest().withNamespace(Constants.TAGS_NAMESPACE).withMetricData(data);
+                new PutMetricDataRequest().withNamespace("TEST1").withMetricData(data);
         cw.putMetricData(request);
     }
 }
