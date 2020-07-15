@@ -1,18 +1,37 @@
 package com.inductiveautomation.ignition.examples.mtp;
 
+import java.io.IOException;
+import java.util.List;
+import java.util.Optional;
 import java.util.Random;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Function;
 
+import com.amazonaws.services.cloudwatch.AmazonCloudWatch;
+import com.amazonaws.services.cloudwatch.AmazonCloudWatchClientBuilder;
+import com.amazonaws.services.cloudwatch.model.Dimension;
+import com.amazonaws.services.cloudwatch.model.MetricDatum;
+import com.amazonaws.services.cloudwatch.model.PutMetricDataRequest;
+import com.google.common.collect.Lists;
 import com.inductiveautomation.ignition.common.TypeUtilities;
 import com.inductiveautomation.ignition.common.licensing.LicenseState;
 import com.inductiveautomation.ignition.common.model.values.QualityCode;
 import com.inductiveautomation.ignition.common.sqltags.model.TagProviderMeta;
 import com.inductiveautomation.ignition.common.sqltags.model.types.DataType;
+import com.inductiveautomation.ignition.common.sqltags.model.types.ExtendedTagType;
+import com.inductiveautomation.ignition.common.sqltags.model.types.TagType;
+import com.inductiveautomation.ignition.common.tags.browsing.NodeDescription;
 import com.inductiveautomation.ignition.common.tags.model.TagPath;
+import com.inductiveautomation.ignition.common.tags.paths.parser.TagPathParser;
 import com.inductiveautomation.ignition.gateway.model.AbstractGatewayModuleHook;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 import com.inductiveautomation.ignition.gateway.tags.managed.ManagedTagProvider;
 import com.inductiveautomation.ignition.gateway.tags.managed.ProviderConfiguration;
-import org.apache.log4j.LogManager;
+import com.inductiveautomation.ignition.gateway.tags.model.GatewayTagManager;
+import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
+import metric.Constants;
+import metric.TagsUtil;
 import org.apache.log4j.Logger;
 
 /**
@@ -32,6 +51,7 @@ import org.apache.log4j.Logger;
  * 并且会创建许多别的 tags，其命名格式为 Custom Tags/Tag %d。 这些 tags 会自动更新。但是只读的
  *
  */
+@Slf4j
 public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
     private static final String TASK_NAME = "UpdateSampleValues";
     //This pattern will be used for tag names. So, tags will be created under the "Custom Tags" folder.
@@ -43,9 +63,11 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
     private ManagedTagProvider ourProvider;
     //This example adds/removes tags, so we'll track how many we currently have.
     private int currentTagCount = 0;
+    private String tagProviderName = "Example";
+
 
     public ManagedProviderGatewayHook() {
-        logger = LogManager.getLogger(this.getClass());
+//        logger = LogManager.getLogger(this.getClass());
     }
 
     @Override
@@ -77,22 +99,35 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
             //Now set up our first batch of tags.
             // 创建10个 tags
             adjustTags(10);
+
+
+
         } catch (Exception e) {
-            logger.fatal("Error setting up ManagedTagProvider example module.", e);
+            log.warn("Error setting up ManagedTagProvider example module.", e);
         }
     }
 
     @Override
     public void startup(LicenseState activationState) {
         try {
-            //Register a task with the execution system to update values every second.
+            // Register a task with the execution system to update values every second.
             // 相当于让系统自己跑一个脚本，执行一个程序。而这里执行的是 updateValues，即更新数据
             // 这里的 1000 应该是指 1000 ms
+            // context.getExecutionManager() 得到的是 BasicExecutionEngine
+            // 将后面的注册到 BasicExecutionEngine 中
+            log.warn("FFFFFFFFFFFFFF");
             context.getExecutionManager().register(getClass().getName(), TASK_NAME, this::updateValues, 1000);
+//            context.getExecutionManager().register(getClass().getName(), "T", this::readAndPublishTags, 1000);
 
-            logger.info("Example Provider module started.");
+
+            // 用下面的方法创建一个 ExecutionManager
+            // ExecutionManager executionManager = context.createExecutionManager()
+
+            log.info("Example Provider module started.");
+
+            readAndPublishTags();
         } catch (Exception e) {
-            logger.fatal("Error starting up ManagedTagProvider example module.", e);
+            log.warn("Error starting up ManagedTagProvider example module.", e);
         }
 
     }
@@ -108,9 +143,9 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
                 ourProvider.shutdown(true);
             }
         } catch (Exception e) {
-            logger.error("Error stopping ManagedTagProvider example module.", e);
+            log.error("Error stopping ManagedTagProvider example module.", e);
         }
-        logger.info("ManagedTagProvider example module stopped.");
+        log.info("ManagedTagProvider example module stopped.");
     }
 
     /**
@@ -148,5 +183,99 @@ public class ManagedProviderGatewayHook extends AbstractGatewayModuleHook {
             // 更新 Tags
             ourProvider.updateValue(String.format(TAG_NAME_PATTERN, i), r.nextFloat(), QualityCode.Good);
         }
+    }
+
+   private void readAndPublishTags(){
+        log.warn("TTTTTTTTTTTTT");
+       GatewayTagManager tagsManager = this.context.getTagManager();
+        // 创建 dimensions 这里应该是有很多个 dimension
+       Dimension dimension = new Dimension()
+               .withName("TAGS_TEST")
+               .withValue("TEST1");
+
+       final List<MetricDatum> tagRecords = Lists.newArrayList();
+       try {
+           // 新创建的 tagprovider name 就是 Example
+           TagPath rootPath = TagPathParser.parse(tagProviderName, "");
+           List<NodeDescription> nodeDescriptions = TagsUtil.readAllTags(tagProviderName, tagsManager, rootPath);
+           nodeDescriptions.forEach(description -> log.warn(description.getName()));
+
+           TagsUtil.readAllTags(tagProviderName, tagsManager, rootPath)
+                   .forEach(
+                           nodeDescription -> {
+                               createTagRecord(
+                                       true,
+                                       nodeDescription, rootPath, dimension)
+                                       .ifPresent(tagRecords::add);
+                           });
+       } catch (final IOException e) {
+           // no-op. When the tagProvider comes up, it starts sending metrics
+       } catch (final InterruptedException e){
+           // no-op. When the tagProvider comes up, it starts sending metrics
+       } catch (final ExecutionException e){
+           // no-op. When the tagProvider comes up, it starts sending metrics
+       }
+
+       if (!tagRecords.isEmpty()) {
+           tagRecords.forEach(record -> log.warn(record.getMetricName()));
+           //publish(tagRecords);
+       }
+   }
+
+    private Optional<MetricDatum> createTagRecord(
+            final boolean isHot, @NonNull final NodeDescription nodeDescription, TagPath rootPath, Dimension dimension) {
+        // final TagInfo tagInfo = tagInfoResult.getTagInfo();
+        // 这个是 AWS service 中的内容
+        return getTagRecordValueConverter(TagType.fromTagObjectType(nodeDescription.getObjectType()), nodeDescription.getDataType())
+                .map(
+                        converter ->
+                                new MetricDatum()
+                                        .withMetricName(rootPath.toString())
+                                        .withValue(converter.apply(nodeDescription.getCurrentValue().getValue()))
+                                        .withDimensions(dimension));
+    }
+
+    private static Optional<Function<Object, Double>> getTagRecordValueConverter(
+            @NonNull final ExtendedTagType tagType, @NonNull final DataType dataType) {
+
+        if (tagType.equals(TagType.Folder)) {
+            return Optional.empty();
+        }
+
+        switch (dataType) {
+            case Boolean:
+                return Optional.of(ManagedProviderGatewayHook::fromBoolean);
+            case Int1:
+            case Int2:
+            case Int4:
+            case Int8:
+            case Float4:
+            case Float8:
+                return Optional.of(ManagedProviderGatewayHook::fromNumber);
+            default:
+                return Optional.empty();
+        }
+    }
+
+    private static Double fromBoolean(final Object value) {
+        if (value != null) {
+            return Boolean.TRUE.equals(value) ? 1D : 0D;
+        }
+        return 0D;
+    }
+
+    private static Double fromNumber(final Object value) {
+        if (value != null && value instanceof Number) {
+            return ((Number) value).doubleValue();
+        }
+        return 0D;
+    }
+
+    void publish(@NonNull final List<MetricDatum> data) {
+        final AmazonCloudWatch cw =
+                AmazonCloudWatchClientBuilder.defaultClient();
+        final PutMetricDataRequest request =
+                new PutMetricDataRequest().withNamespace(Constants.TAGS_NAMESPACE).withMetricData(data);
+        cw.putMetricData(request);
     }
 }
