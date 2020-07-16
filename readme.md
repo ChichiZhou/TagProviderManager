@@ -20,3 +20,4 @@ The default values for the start time and end time get you the last hour's worth
 
 
 The value published to the AWS CloudWatch Metric is 10 which is the number of tags
+![image](https://github.com/ChichiZhou/TagProviderManager/blob/newbranch/TEST1_1min.png)
